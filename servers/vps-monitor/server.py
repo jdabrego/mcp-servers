@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import shlex
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -19,21 +20,26 @@ SSH_HOST = _config["host"]
 SSH_USER = _config["user"]
 COMPOSE_PATHS = _config["docker_compose_paths"]
 
-# Blocked commands for safety
-BLOCKED_PATTERNS = ["rm ", "dd ", "mkfs", "reboot", "shutdown", "kill -9", "format", "> /dev/"]
+from validation import (
+    InvalidArgument,
+    SERVICE_RE,
+    valid_lines,
+    valid_service,
+    valid_since,
+)
 
 mcp = FastMCP("vps-monitor", instructions="Tools for monitoring a remote Linux host running Docker Compose services over SSH.")
 
 
 async def _ssh(command: str, timeout: int = 15) -> str:
-    """Execute a command on the VPS via SSH. Returns stdout or error message."""
-    for blocked in BLOCKED_PATTERNS:
-        if blocked in command:
-            return f"BLOCKED: Command contains forbidden pattern '{blocked}'"
+    """Run a command on the remote host over SSH. Returns stdout or a readable error.
 
+    Callers must validate and quote every value they interpolate; this function
+    does not inspect the command it is given.
+    """
     ssh_cmd = [
         "ssh", "-i", str(Path(SSH_KEY).expanduser()),
-        "-o", "StrictHostKeyChecking=no",
+        "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ConnectTimeout=10",
         f"{SSH_USER}@{SSH_HOST}",
         command
@@ -63,6 +69,8 @@ async def vps_service_status(service: str = "all") -> str:
     """Check Docker container status on the VPS. Pass 'all' for all containers or a specific service name."""
     cmd = "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
     result = await _ssh(cmd)
+    if service != "all" and not SERVICE_RE.match(service):
+        return f"REFUSED: {service!r} is not a valid container name."
     if service != "all" and result and "ERROR" not in result:
         lines = result.split("\n")
         header = lines[0] if lines else ""
@@ -74,7 +82,11 @@ async def vps_service_status(service: str = "all") -> str:
 @mcp.tool()
 async def vps_read_logs(service: str, lines: int = 50, since: str = "1h") -> str:
     """Read Docker container logs from the VPS. Specify service name, number of lines, and time period."""
-    cmd = f"docker logs --tail={lines} --since={since} {service} 2>&1"
+    try:
+        svc, window, tail = valid_service(service), valid_since(since), valid_lines(lines)
+    except InvalidArgument as e:
+        return f"REFUSED: {e}"
+    cmd = f"docker logs --tail={tail} --since={window} {svc} 2>&1"
     return await _ssh(cmd, timeout=20)
 
 
@@ -95,16 +107,32 @@ async def vps_resource_usage() -> str:
 @mcp.tool()
 async def vps_error_count(service: str = "all", since: str = "12h") -> str:
     """Count errors in Docker container logs. Returns error count per service."""
-    if service == "all":
-        cmd = f"""for svc in $(docker ps --format '{{{{.Names}}}}'); do COUNT=$(docker logs $svc --since {since} 2>&1 | grep -ciE 'error|exception|traceback' 2>/dev/null || echo 0); echo "$svc: $COUNT errors"; done"""
+    try:
+        window = valid_since(since)
+        svc = None if service == "all" else valid_service(service)
+    except InvalidArgument as e:
+        return f"REFUSED: {e}"
+
+    if svc is None:
+        cmd = (
+            "for svc in $(docker ps --format '{{.Names}}'); do "
+            f"COUNT=$(docker logs \"$svc\" --since {window} 2>&1 "
+            "| grep -ciE 'error|exception|traceback' 2>/dev/null || echo 0); "
+            'echo "$svc: $COUNT errors"; done'
+        )
     else:
-        cmd = f"docker logs {service} --since {since} 2>&1 | grep -ciE 'error|exception|traceback'"
+        cmd = f"docker logs {svc} --since {window} 2>&1 | grep -ciE 'error|exception|traceback'"
     return await _ssh(cmd, timeout=20)
 
 
 @mcp.tool()
 async def vps_restart_service(service: str, confirm: str = "") -> str:
     """Restart a Docker service on the VPS. REQUIRES confirm='CONFIRM' as safety gate."""
+    try:
+        svc = valid_service(service)
+    except InvalidArgument as e:
+        return f"REFUSED: {e}"
+
     if confirm != "CONFIRM":
         return f"SAFETY GATE: To restart '{service}', call with confirm='CONFIRM'. This will cause brief downtime for the service."
 
@@ -116,13 +144,16 @@ async def vps_restart_service(service: str, confirm: str = "") -> str:
             break
 
     if compose_path:
-        cmd = f"cd {compose_path} && docker compose restart {service}"
+        cmd = f"cd {shlex.quote(compose_path)} && docker compose restart {svc}"
     else:
-        cmd = f"docker restart {service}"
+        cmd = f"docker restart {svc}"
 
     result = await _ssh(cmd, timeout=30)
     # Verify it came back up
-    verify = await _ssh(f"sleep 3 && docker ps --format '{{{{.Names}}}}: {{{{.Status}}}}' | grep {service}", timeout=15)
+    verify = await _ssh(
+        "sleep 3 && docker ps --format '{{.Names}}: {{.Status}}' | grep -- " + svc,
+        timeout=15,
+    )
     return f"Restart result: {result}\n\nVerification: {verify}"
 
 

