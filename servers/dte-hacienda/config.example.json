@@ -1,0 +1,5 @@
+{
+  "api_base": "https://your-invoicing-host.example.com",
+  "email": "you@example.com",
+  "password": "change-me"
+}

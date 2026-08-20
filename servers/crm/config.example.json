@@ -1,0 +1,5 @@
+{
+  "api_base": "https://your-crm.example.com/api/v1",
+  "email": "you@example.com",
+  "password": "change-me"
+}
