@@ -5,3 +5,41 @@ __pycache__/
 venv/
 .pytest_cache/
 .DS_Store
+
+# === Contencion de secretos - fase 1 (anadido automaticamente) ===
+# Variables de entorno
+.env
+.env.*
+!.env.example
+
+# Credenciales y tokens
+credentials.json
+credentials*.json
+token.json
+token*.json
+service-account*.json
+serviceAccount*.json
+client_secret*.json
+secrets*.json
+*.local.md
+
+# Material criptografico
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+.netrc
+.npmrc
+.pypirc
+certificados/
+
+# Perfiles de navegador (cookies de sesion y contrasenas guardadas)
+**/chrome-profile*/
+.auth/
+
+!.env.example
